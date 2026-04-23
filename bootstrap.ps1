@@ -91,7 +91,7 @@ function Install-DxCyberProtect {
 }
 
 try {
-    Write-Log '--- Bootstrap started ---'
+    Write-Log '--- New Bootstrap started ---'
 
     $InstalledVer   = Get-InstalledVersion -DisplayName 'DX CyberProtect'
     $WazuhInstalled = Test-InstalledSoftware -DisplayName 'Wazuh Agent'
