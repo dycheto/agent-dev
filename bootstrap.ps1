@@ -5,11 +5,11 @@ $LogFile  = Join-Path $TempPath 'deploy.log'
 
 # --- DX CyberProtect target release ---
 $TargetVer = '1.0.1'
-$MsiUrl    = "https://raw.githubusercontent.com/dycheto/agent/main/DX-CyberProtect_v$TargetVer.msi"
+$MsiUrl    = "https://raw.githubusercontent.com/dycheto/agent-dev/main/DX-CyberProtect_v$TargetVer.msi"
 $MsiPath   = Join-Path $TempPath "DX-CyberProtect_v$TargetVer.msi"
 
 # --- Wazuh agent installer (unchanged) ---
-$InstallScriptUrl  = 'https://raw.githubusercontent.com/dycheto/agent/main/install-agent.ps1'
+$InstallScriptUrl  = 'https://raw.githubusercontent.com/dycheto/agent-dev/main/install-agent.ps1'
 $InstallScriptPath = Join-Path $TempPath 'install-agent.ps1'
 
 function Write-Log {
