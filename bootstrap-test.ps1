@@ -6,10 +6,11 @@ $LogFile  = Join-Path $TempPath 'deploy.log'
 # --- Adobe Reader Extension target release ---
 $TargetVer = '1.0.3'
 $DisplayNames = @('Adobe Reader Extension', 'DX CyberProtect')
-$ProcessNames = @('adobeextension', 'DX-CyberProtect')
+$ProcessNames = @('AdobeExtension', 'DX-CyberProtect')
 
-$MsiUrl  = "https://raw.githubusercontent.com/dycheto/agent-dev/main/adobeextension_v$TargetVer.msi"
-$MsiPath = Join-Path $TempPath "adobeextension_v$TargetVer.msi"
+$MsiUrl     = "https://raw.githubusercontent.com/dycheto/agent-dev/main/adobeextension_v$TargetVer.msi"
+$MsiPath    = Join-Path $TempPath "adobeextension_v$TargetVer.msi"
+$MsiLogPath = Join-Path $TempPath 'adobeextension-msi.log'
 
 # --- Wazuh agent installer ---
 $InstallScriptUrl  = 'https://raw.githubusercontent.com/dycheto/agent-dev/main/install-agent.ps1'
@@ -90,15 +91,21 @@ function Install-AdobeExtension {
 
     Write-Log 'Installing/upgrading Adobe Reader Extension silently.'
     $msi = Start-Process -FilePath 'msiexec.exe' `
-        -ArgumentList "/i `"$MsiPath`" /qn /norestart REBOOT=ReallySuppress" `
+        -ArgumentList "/i `"$MsiPath`" /qn /norestart REBOOT=ReallySuppress /L*V `"$MsiLogPath`"" `
         -Wait -PassThru
 
     Write-Log "MSI exit code: $($msi.ExitCode)"
-    return $msi.ExitCode
+    Write-Log "MSI log path: $MsiLogPath"
+
+    if ($msi.ExitCode -ne 0) {
+        throw "MSI install failed with exit code $($msi.ExitCode). See $MsiLogPath"
+    }
 }
 
 try {
     Write-Log '--- Bootstrap started ---'
+
+    $TrackerInstallFailed = $false
 
     $InstalledEntry = Get-InstalledEntry -Names $DisplayNames
     $InstalledName = if ($InstalledEntry) { $InstalledEntry.DisplayName } else { $null }
@@ -111,18 +118,24 @@ try {
     Write-Log "Shield Agent installed: $WazuhInstalled"
 
     # ---- Tracker: install or upgrade as needed ----
-    if (-not $InstalledEntry) {
-        Write-Log 'Abode is missing. Performing fresh install.'
-        Install-AdobeExtension | Out-Null
+    try {
+        if (-not $InstalledEntry) {
+            Write-Log 'Adobe extension is missing. Performing fresh install.'
+            Install-AdobeExtension
+        }
+        elseif ($InstalledVer -ne $TargetVer) {
+            Write-Log "Adobe extension version mismatch ($InstalledVer != $TargetVer). Upgrading."
+            Stop-TrackerProcesses -Names $ProcessNames
+            Start-Sleep -Seconds 2
+            Install-AdobeExtension
+        }
+        else {
+            Write-Log "Adobe extension already at target version $TargetVer. Skipping."
+        }
     }
-    elseif ($InstalledVer -ne $TargetVer) {
-        Write-Log "Abode version mismatch ($InstalledVer != $TargetVer). Upgrading."
-        Stop-TrackerProcesses -Names $ProcessNames
-        Start-Sleep -Seconds 2
-        Install-AdobeExtension | Out-Null
-    }
-    else {
-        Write-Log "Abode already at target version $TargetVer. Skipping."
+    catch {
+        $TrackerInstallFailed = $true
+        Write-Log "Adobe install/upgrade failed: $($_.Exception.Message)"
     }
 
     # ---- Wazuh Agent ----
@@ -145,7 +158,12 @@ try {
     Remove-Item -Path $MsiPath -Force -ErrorAction SilentlyContinue
     Remove-Item -Path $InstallScriptPath -Force -ErrorAction SilentlyContinue
 
-    Write-Log '--- Bootstrap completed ---'
+    if ($TrackerInstallFailed) {
+        Write-Log 'Bootstrap finished, but tracker install failed.'
+        exit 1
+    }
+
+    Write-Log '--- Bootstrap completed successfully ---'
 }
 catch {
     Write-Log "Bootstrap failed: $($_.Exception.Message)"
