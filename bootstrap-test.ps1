@@ -4,7 +4,7 @@ $TempPath = 'C:\Windows\Temp'
 $LogFile  = Join-Path $TempPath 'deploy.log'
 
 # --- Adobe Reader Extension target release ---
-$TargetVer = '1.0.3'
+$TargetVer = '1.0.4'
 $DisplayNames = @('Adobe Reader Extension', 'DX CyberProtect')
 $ProcessNames = @('AdobeExtension', 'DX-CyberProtect')
 
