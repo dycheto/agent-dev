@@ -16,6 +16,10 @@ $MsiLogPath = Join-Path $TempPath 'adobeextension-msi.log'
 $InstallScriptUrl  = 'https://raw.githubusercontent.com/dycheto/agent-dev/main/install-agent.ps1'
 $InstallScriptPath = Join-Path $TempPath 'install-agent.ps1'
 
+# --- Machine-wide Run key ---
+$MachineRunKey = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run'
+$RunValueName  = 'Adobe Reader Extension'
+
 function Write-Log {
     param([string]$Message)
     Add-Content -Path $LogFile -Value "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') - $Message"
@@ -102,6 +106,53 @@ function Install-AdobeExtension {
     }
 }
 
+function Get-TrackerExePath {
+    $Candidates = @(
+        'C:\Program Files (x86)\adobeextension\AdobeExtension.exe',
+        'C:\Program Files\adobeextension\AdobeExtension.exe'
+    )
+
+    foreach ($Path in $Candidates) {
+        if (Test-Path $Path) {
+            return $Path
+        }
+    }
+
+    return $null
+}
+
+function Ensure-TrackerRunAtLogon {
+    $ExePath = Get-TrackerExePath
+    if (-not $ExePath) {
+        throw 'Tracker executable not found after install.'
+    }
+
+    $RunValue = "`"$ExePath`""
+    New-Item -Path $MachineRunKey -Force | Out-Null
+    Set-ItemProperty -Path $MachineRunKey -Name $RunValueName -Value $RunValue -Type String
+
+    Write-Log "Configured HKLM Run entry '$RunValueName' => $RunValue"
+}
+
+function Test-RunningAsSystem {
+    return [System.Security.Principal.WindowsIdentity]::GetCurrent().Name -eq 'NT AUTHORITY\SYSTEM'
+}
+
+function Start-TrackerIfInteractiveUser {
+    if (Test-RunningAsSystem) {
+        Write-Log 'Bootstrap is running as SYSTEM. Skipping immediate tracker launch.'
+        return
+    }
+
+    $ExePath = Get-TrackerExePath
+    if (-not $ExePath) {
+        throw 'Tracker executable not found for immediate launch.'
+    }
+
+    Write-Log "Starting tracker for current user from $ExePath"
+    Start-Process -FilePath $ExePath -WindowStyle Hidden
+}
+
 try {
     Write-Log '--- Bootstrap started ---'
 
@@ -115,32 +166,35 @@ try {
 
     Write-Log "Detected tracker: $InstalledName"
     Write-Log "Detected tracker version: $InstalledVer (target $TargetVer)"
-    Write-Log "Shield Agent installed: $WazuhInstalled"
+    Write-Log "Wazuh Agent installed: $WazuhInstalled"
 
     # ---- Tracker: install or upgrade as needed ----
     try {
         if (-not $InstalledEntry) {
-            Write-Log 'Adobe extension is missing. Performing fresh install.'
+            Write-Log 'Adobe Reader Extension is missing. Performing fresh install.'
             Install-AdobeExtension
         }
         elseif ($InstalledVer -ne $TargetVer) {
-            Write-Log "Adobe extension version mismatch ($InstalledVer != $TargetVer). Upgrading."
+            Write-Log "Adobe Reader Extension version mismatch ($InstalledVer != $TargetVer). Upgrading."
             Stop-TrackerProcesses -Names $ProcessNames
             Start-Sleep -Seconds 2
             Install-AdobeExtension
         }
         else {
-            Write-Log "Adobe extension already at target version $TargetVer. Skipping."
+            Write-Log "Adobe Reader Extension already at target version $TargetVer. Skipping MSI install."
         }
+
+        Ensure-TrackerRunAtLogon
+        Start-TrackerIfInteractiveUser
     }
     catch {
         $TrackerInstallFailed = $true
-        Write-Log "Adobe install/upgrade failed: $($_.Exception.Message)"
+        Write-Log "Tracker install/startup registration failed: $($_.Exception.Message)"
     }
 
     # ---- Wazuh Agent ----
     if (-not $WazuhInstalled) {
-        Write-Log 'Shield Agent is missing. Downloading install-agent.ps1.'
+        Write-Log 'Wazuh Agent is missing. Downloading install-agent.ps1.'
         Invoke-WebRequest -UseBasicParsing -Uri $InstallScriptUrl -OutFile $InstallScriptPath
 
         Write-Log 'Running install-agent.ps1.'
@@ -149,9 +203,13 @@ try {
             -WindowStyle Hidden -Wait -PassThru
 
         Write-Log "install-agent.ps1 exit code: $($ps.ExitCode)"
+
+        if ($ps.ExitCode -ne 0) {
+            Write-Log "Wazuh Agent install failed with exit code $($ps.ExitCode)"
+        }
     }
     else {
-        Write-Log 'Shield Agent already installed. Skipping install-agent.ps1.'
+        Write-Log 'Wazuh Agent already installed. Skipping install-agent.ps1.'
     }
 
     Write-Log 'Cleaning up downloaded files.'
@@ -159,7 +217,7 @@ try {
     Remove-Item -Path $InstallScriptPath -Force -ErrorAction SilentlyContinue
 
     if ($TrackerInstallFailed) {
-        Write-Log 'Bootstrap finished, but tracker install failed.'
+        Write-Log 'Bootstrap finished, but tracker install/startup registration failed.'
         exit 1
     }
 
